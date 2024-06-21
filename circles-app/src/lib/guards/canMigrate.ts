@@ -6,12 +6,12 @@ export function canMigrate(avatar: AvatarRow | undefined): boolean {
     }
 
     // Pure v1 avatars can migrate
-    if (avatar.version === 1) {
+    if (avatar.version === 1 && avatar.type === "human") {
         return true;
     }
 
     // v2 avatars can migrate if they have a v1 token and it's not stopped
-    if (avatar.hasV1 && avatar.version === 2) {
+    if (avatar.hasV1 && avatar.version === 2 && avatar.type === "human") {
         return !avatar.v1Stopped ?? false;
     }
 
