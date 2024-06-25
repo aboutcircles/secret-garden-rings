@@ -3,20 +3,49 @@
     import {goto} from "$app/navigation";
     import {wallet} from "$lib/stores/wallet";
     import {circles} from "$lib/stores/circles";
-    import {BrowserProvider} from "ethers";
+    import {BrowserProvider, ethers} from "ethers";
     import {avatar} from "$lib/stores/avatar";
-    import {Sdk} from "@circles-sdk/sdk";
+    import {type ProviderWithMetadata, Sdk} from "@circles-sdk/sdk";
     import {chainConfig} from "$lib/chainConfig";
+    import {SafeAppProvider} from '@safe-global/safe-apps-provider';
+    import SafeAppsSDK from '@safe-global/safe-apps-sdk';
 
     //
     // Gets the browser provider from the window object.
     //
-    function getBrowserProvider() {
+    async function getBrowserProvider(): ProviderWithMetadata {
         const w: any = window;
         if (!w.ethereum) {
             throw new Error('No browser wallet found (window.ethereum is undefined)');
         }
-        return new BrowserProvider(w.ethereum);
+        const provider = new BrowserProvider(w.ethereum);
+        const signer = await provider.getSigner();
+
+        return {
+            provider: provider,
+            address: await signer.getAddress()
+        }
+    }
+
+    async function getSafeAppProvider(): ProviderWithMetadata {
+        type Opts = {
+            allowedDomains?: RegExp[];
+            debug?: boolean;
+        };
+
+        const opts: Opts = {
+            allowedDomains: [/^app\.safe\.global$/],
+            debug: true,
+        };
+
+        const appsSdk = new SafeAppsSDK(opts);
+        const provider = new SafeAppProvider(appsSdk.safe, appsSdk);
+        const safeInfo = await appsSdk.safe.getInfo();
+
+        return {
+            provider: new BrowserProvider(provider),
+            address: safeInfo.safeAddress
+        };
     }
 
     async function initializeSdk() {
@@ -30,16 +59,15 @@
     // Connects the wallet and initializes the Circles SDK.
     //
     async function connectWallet() {
-        const provider = getBrowserProvider();
+        const provider = await getSafeAppProvider();
 
         // Set the signer as $connectedWallet to make it globally available.
-        $wallet = await provider.getSigner();
+        $wallet = await provider;
 
         // Initialize the Circles SDK and set it as $circles to make it globally available.
         $circles = await initializeSdk();
 
-        const walletAddress = await $wallet.getAddress();
-        const avatarInfo = await $circles.data.getAvatarInfo(walletAddress);
+        const avatarInfo = await $circles.data.getAvatarInfo($wallet.address);
 
         // If the signer address is already a registered Circles wallet, go straight to the dashboard.
         if (avatarInfo) {
