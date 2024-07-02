@@ -1,70 +1,73 @@
 <script lang="ts" context="module">
-  import type { CirclesQuery, EventRow } from "@circles-sdk/data";
+  import { CirclesQuery, type TransactionHistoryRow } from "@circles-sdk/data";
   import type { SvelteComponent } from "svelte";
 
   export interface RowItem {
     [key: string]: any;
   }
 
-  export interface ListProps<TRow extends EventRow> {
+  export interface ListProps<TRow extends TransactionHistoryRow> {
     rowComponent: typeof SvelteComponent;
-    query: CirclesQuery<TRow>;
+    query: CirclesQuery<TRow> | null;
   }
 </script>
 
 <script lang="ts">
   import { createEventDispatcher, onMount } from "svelte";
-  import { avatar } from "$lib/stores/avatar.js"; // Ensure this path is correct
-  import type { Avatar } from "@circles-sdk/sdk";
+  import { get } from "svelte/store";
+  import { avatar } from "$lib/stores/avatar.js";
 
   const eventDispatcher = createEventDispatcher();
 
   export let rowComponent: typeof SvelteComponent;
-  export let query: CirclesQuery<EventRow>;
+  export let query: CirclesQuery<TransactionHistoryRow> | null = null;
   let rows: RowItem[] = [];
   let observer: IntersectionObserver;
   let pageEndMarker: HTMLLIElement;
   let unsubscribe: () => void;
+  let pageNo = 0;
 
-  async function fetchInitialPage() {
-    if (query.currentPage && query.currentPage.results) {
-      rows = query.currentPage.results;
-    } else {
-      await fetchNextPage(); // Initial page load if no currentPage
-    }
+  async function loadInitialPage() {
+    if (!query) return;
+
+    const resultRows = query.currentPage?.results ?? [];
+    rows = [...rows, ...resultRows];
+    console.log(`Initial load: ${resultRows.length} results`, resultRows);
   }
 
-  async function fetchNextPage() {
+  async function loadNextPage() {
     if (!query) return;
-    try {
-      const hasNextPage = await query.queryNextPage();
-      if (hasNextPage && query.currentPage && query.currentPage.results) {
-        const newRows = query.currentPage.results;
-        rows = [...rows, ...newRows]; // Append new rows to existing rows
-      }
-    } catch (error) {
-      console.error("Error fetching next page:", error);
+    const hasMorePages = await query.queryNextPage();
+    if (hasMorePages) {
+      const newRows = query.currentPage?.results ?? [];
+      rows = [...rows, ...newRows];
+      console.log(`Page ${pageNo++}: ${newRows.length} results`);
+    } else {
+      observer.disconnect();
     }
   }
 
   async function refresh() {
-    try {
-      const result = await query.queryNextPage(); // Fetch the latest page
-      if (result && result.currentPage && result.currentPage.results) {
-        const newRows = result.currentPage.results;
-        rows = [...rows, ...newRows]; // Prepend new rows to existing rows
-      }
-    } catch (error) {
-      console.error("Error refreshing transactions:", error);
+    const avatarValue = get(avatar);
+    if (!avatarValue) return;
+    const latestQuery = await avatarValue.getTransactionHistory(1);
+    const latestRows = latestQuery.currentPage?.results ?? [];
+    if (latestRows.length > 0) {
+      const existingIds = new Set(rows.map((row) => row.transactionHash));
+      const uniqueNewRows = latestRows.filter(
+        (row) => !existingIds.has(row.transactionHash)
+      );
+      rows = [...uniqueNewRows, ...rows];
+      console.log("Refreshed with new rows:", uniqueNewRows);
     }
   }
 
   onMount(async () => {
-    await fetchInitialPage(); // Fetch the initial page on mount
+    await loadInitialPage();
 
     observer = new IntersectionObserver(async (entries) => {
-      if (entries[0].isIntersecting) {
-        await fetchNextPage();
+      if (entries[0].isIntersecting && query) {
+        await loadNextPage();
       }
     });
 
@@ -74,9 +77,9 @@
   });
 
   $: {
-    const avatarValue: Avatar | undefined = $avatar;
+    const avatarValue = get(avatar);
     if (avatarValue?.events) {
-      if (unsubscribe) unsubscribe(); // Unsubscribe from previous subscription
+      if (unsubscribe) unsubscribe();
       unsubscribe = avatarValue.events.subscribe(async (event) => {
         if (
           event.$event !== "CrcV1_Transfer" &&
@@ -88,6 +91,10 @@
         await refresh();
       });
     }
+  }
+
+  function onItemClick(item: RowItem, index: number) {
+    eventDispatcher("itemClick", { item, index });
   }
 </script>
 
