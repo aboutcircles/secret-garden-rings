@@ -7,17 +7,21 @@
     import {circles} from "$lib/stores/circles";
     import {avatar} from "$lib/stores/avatar";
     import {removeProfileFromCache} from "$lib/components/Avatar.svelte";
+    import BalanceRow from "$lib/components/BalanceRow.svelte";
+    import type {TokenBalanceRow} from "@circles-sdk/data";
+    import {tokenTypeToString} from "$lib/pages/SelectAsset.svelte";
 
     export let contentApi: PopupContentApi;
     export let context: MigrateToV2Context;
+    export let asset: TokenBalanceRow;
 
     // New variable for token amount input
     let tokenAmount = "";
 
-    onMount(async () => {
-    });
+    // On mount lifecycle
+    onMount(async () => { });
 
-    // Migrate avatar (profile and trust relations) function
+    // Function to migrate avatar
     async function migrateAvatar() {
         if (!$circles || !$avatar?.address) {
             throw new Error("Sdk or Avatar store not initialized");
@@ -26,60 +30,64 @@
             throw new Error("Profile not initialized");
         }
 
-        runTask({
+        await runTask({
             name: `Migrating your Avatar ...`,
             promise: $circles.migrateAvatar($avatar.address, context.profile)
-        })
-            .then(async () => {
-                removeProfileFromCache($avatar!.address);
-                $avatar!.avatarInfo!.version = 2;
-                $avatar!.avatarInfo!.v1Stopped = true;  // Block V1 minting
-                $avatar = $avatar;
-            });
+        });
+
+        removeProfileFromCache($avatar!.address);
+        $avatar!.avatarInfo!.version = 2;
+        $avatar!.avatarInfo!.v1Stopped = true; // Stop V1 minting
+        $avatar = $avatar;
     }
 
-    // Migrate V1 tokens function (with optional token amount)
+    // Function to migrate specific V1 tokens
     async function migrateV1Tokens() {
         if (!$circles || !$avatar?.address) {
             throw new Error("Sdk or Avatar store not initialized");
         }
 
-        // Here, you can handle whether the input is a token amount or if they want to migrate all tokens
-        let tokens = tokenAmount ? [context.token] : [];
+        // Fetch token info to validate
+        const tokenInfo = await $circles?.data?.getTokenInfo(asset.tokenAddress);
+        if (!tokenInfo) {
+            throw new Error("Token info is not available");
+        }
+        if (tokenInfo.version !== 1) {
+            throw new Error(`Token ${tokenInfo.token} is not a V1 token and can't be migrated.`);
+        }
 
-        runTask({
-            name: `Migrating ${tokenAmount || 'all'} V1 tokens...`,
-            promise: $circles.migrateV1Tokens($avatar.address, tokens)
-        })
-            .then(async () => {
-                // Handle successful token migration
-                $avatar!.avatarInfo!.v1Stopped = true; // Stop minting but continue using V1 tokens
-                $avatar = $avatar;
-            });
-    }
+        // Parse token amount and validate it
+        const amount = parseInt(tokenAmount, 10);
+        if (isNaN(amount) || amount <= 0) {
+            throw new Error("Please enter a valid token amount to migrate.");
+        }
 
-    // Function to handle the entire migration process (avatar + tokens)
-    async function migrate() {
-        // Migrate avatar first
-        await migrateAvatar();
-        
-        // Migrate V1 tokens afterward
-        await migrateV1Tokens();
+        // Run the migration task for the specific token amount
+        await runTask({
+            name: `Migrating ${tokenAmount} of ${tokenTypeToString(asset.tokenType)} to V2...`,
+            promise: $circles.migrateV1Tokens($avatar.address, [asset.tokenAddress]) // Assumes this handles the amount internally
+        });
 
         contentApi.close();
+    }
+
+    // Combined migration function for avatar and tokens
+    async function migrate() {
+        await migrateAvatar(); // Migrate avatar
+        await migrateV1Tokens(); // Migrate specified tokens
     }
 </script>
 
 <FlowDecoration>
     <p>
         You're ready to migrate to Circles V2! 
-        You can specify the amount of V1 tokens you want to migrate below, or leave it blank to migrate all tokens.
+        Enter the amount of V1 tokens you want to migrate below, or leave it blank to migrate all tokens.
         Click the button to start the migration process.
     </p>
 
     <!-- Input field for token amount (optional) -->
     <div class="flex flex-col mt-4">
-        <label for="tokenAmount" class="mb-2 text-sm font-medium">Enter token amount to migrate (optional):</label>
+        <label for="tokenAmount" class="mb-2 text-sm font-medium">Enter token amount to migrate:</label>
         <input
             id="tokenAmount"
             type="number"
