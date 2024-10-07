@@ -25,7 +25,7 @@
 
         runTask({
             name: `Migrate ${tokenTypeToString(asset.tokenType)} to v2...`,
-            promise: $circles.migrateV1TokensBatch($avatar.address, [asset.tokenAddress])
+            promise: $circles.migrateV1Tokens($avatar.address, [asset.tokenAddress])
         });
 
         contentApi.close();

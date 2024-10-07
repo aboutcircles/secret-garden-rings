@@ -1,4 +1,5 @@
 <script lang="ts">
+
     import type {PopupContentApi} from "$lib/components/PopUp.svelte";
     import FlowDecoration from "$lib/flows/FlowDecoration.svelte";
     import ProfileEditor from "$lib/components/ProfileEditor.svelte";
@@ -6,7 +7,9 @@
     import MigrateContacts from "./2_MigrateContacts.svelte"
     import {onMount} from "svelte";
     import {getProfile} from "$lib/components/Avatar.svelte";
+    import {circles} from "$lib/stores/circles";
     import {avatar} from "$lib/stores/avatar";
+    import { runTask } from "../../../routes/+layout.svelte";
 
     export let contentApi: PopupContentApi;
     export let context: MigrateToV2Context;
@@ -78,6 +81,21 @@
         errors = await validateProfile(context.profile);
         if (errors.length > 0) {
             return;
+        }
+
+            // Call migrateAvatar here after validating the profile.
+        if (!$circles || !$avatar?.address) {
+            throw new Error("SDK or Avatar store not initialized");
+        }
+
+
+        try {
+            await runTask({
+                name: `Creating your Avatar...`,
+                promise: $circles.migrateAvatar($avatar.address, context.profile)
+            });
+        } catch (error) {
+            console.error("Error during avatar migration", error);
         }
 
         contentApi.open({
