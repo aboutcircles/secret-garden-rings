@@ -15,13 +15,14 @@ export const chiadoConfig: CirclesConfig = {
     baseGroupMintPolicy: "0xE35c66531aF28660a1CdfA3dd0b1C1C0245D2F67"
 };
 
+// RINGS config
 export const gnosisConfig: CirclesConfig = {
-    circlesRpcUrl: "https://rpc.aboutcircles.com/",
+    circlesRpcUrl: "https://static.94.138.251.148.clients.your-server.de/rpc/",
     pathfinderUrl: "https://pathfinder.aboutcircles.com",
     v1HubAddress: "0x29b9a7fbb8995b2423a71cc17cf9810798f6c543",
-    v2HubAddress: "0xc12C1E50ABB450d6205Ea2C3Fa861b3B834d13e8",
-    nameRegistryAddress: "0xA27566fD89162cC3D40Cb59c87AAaA49B85F3474",
-    migrationAddress: "0xD44B8dcFBaDfC78EA64c55B705BFc68199B56376",
+    v2HubAddress: "0x3D61f0A272eC69d65F5CFF097212079aaFDe8267",
+    nameRegistryAddress: "0x8D1BEBbf5b8DFCef0F7E2039e4106A76Cb66f968",
+    migrationAddress: "0x28141b6743c8569Ad8B20Ac09046Ba26F9Fb1c90",
     profileServiceUrl: "https://rpc.aboutcircles.com/profiles/",
-    baseGroupMintPolicy: "0xcCa27c26CF7BAC2a9928f42201d48220F0e3a549",
+    baseGroupMintPolicy: "0x79Cbc9C7077dF161b92a745345A6Ade3fC626A60",
 }
