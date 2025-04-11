@@ -1,7 +1,8 @@
-import type {TokenBalanceRow} from "@circles-sdk/data";
+import type { TokenBalanceRow } from '@circles-sdk/data';
+import type { Address } from '@circles-sdk/utils';
 
 export type GroupMintFlowContext = {
-    selectedAddress: string | undefined;
-    selectedAsset: TokenBalanceRow | undefined;
-    amount: number | undefined;
+  selectedAddress: Address | undefined;
+  selectedAsset: TokenBalanceRow;
+  amount: number | undefined;
 };

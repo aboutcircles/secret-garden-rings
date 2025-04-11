@@ -1,53 +1,54 @@
 <script lang="ts">
   import { circles } from '$lib/stores/circles';
   import type { Profile } from '@circles-sdk/profiles';
-  import Avatar, { getProfile } from '$lib/components/Avatar.svelte';
   import { avatar } from '$lib/stores/avatar';
   import CommonConnections from '$lib/components/CommonConnections.svelte';
-  import { shortenAddress } from '$lib/utils/shared';
-  import type { Readable } from 'svelte/store';
-  import type {ContactList, ExtendedTrustRelationRow} from '$lib/stores/contacts';
-  import { onMount } from 'svelte';
-  import type { AvatarRow } from '@circles-sdk/data';
-  import { ensureContacts } from '../../routes/+layout.svelte';
+  import { contacts } from '$lib/stores/contacts';
+  import {
+    type AvatarRow,
+    CirclesQuery,
+    type TrustRelationRow,
+  } from '@circles-sdk/data';
   import Untrust from '$lib/pages/Untrust.svelte';
   import Trust from '$lib/pages/Trust.svelte';
   import SelectAsset from '$lib/flows/send/2_Asset.svelte';
-  import MintGroupTokens from '$lib/flows/mintGroupTokens/1_To.svelte';
-  import type { PopupContentApi } from '$lib/components/PopUp.svelte';
-  import ProfilePage from '$lib/pages/Profile.svelte';
+  import { getProfile } from '$lib/utils/profile';
+  import { formatTrustRelation, getTypeString } from '$lib/utils/helpers';
+  import Avatar from '$lib/components/avatar/Avatar.svelte';
+  import { popupControls } from '$lib/stores/popUp';
+  import AddressComponent from '$lib/components/Address.svelte';
+  import { uint256ToAddress, type Address } from '@circles-sdk/utils';
+  import SelectAmount from '$lib/flows/send/3_Amount.svelte';
+  import { transitiveTransfer } from '$lib/pages/SelectAsset.svelte';
+  import { getVaultAddress, getVaultBalances } from '$lib/utils/vault';
+  import CollateralTable from '$lib/components/CollateralTable.svelte';
 
-  let contacts:
-    | Readable<{
-        data: ContactList;
-        next: () => Promise<boolean>;
-        ended: boolean;
-      }>
-    | undefined = undefined;
+  interface Props {
+    address: Address | undefined;
+    trustVersion: number | undefined;
+  }
 
-  export let address: string | undefined;
-  export let contentApi: PopupContentApi | undefined;
-  export let trustVersion: number | undefined;
+  let { address, trustVersion }: Props = $props();
 
-  onMount(async () => {
-    contacts = await ensureContacts();
-  });
-
-  $: {
+  $effect(() => {
     if (address) {
       initialize(address);
     }
-  }
+  });
 
-  let otherAvatar: AvatarRow | undefined;
-  let profile: Profile | undefined;
-  let members: string[] | undefined = undefined;
-  let activeTab = 'common_connections';
+  let otherAvatar: AvatarRow | undefined = $state();
+  let profile: Profile | undefined = $state();
+  let members: Address[] | undefined = $state(undefined);
+  let mintHandler: Address | undefined = $state();
 
-  async function initialize(address?: string) {
-    if (!address) {
-      return;
-    }
+  let trustRow: TrustRelationRow | undefined = $state();
+  let collateralInTreasury: Array<{
+    avatar: Address;
+    amount: bigint; // raw wei from chain
+    amountToRedeem: number;
+  }> = $state([]);
+
+  async function initialize(address: Address) {
     if (!$circles) {
       return;
     }
@@ -56,9 +57,10 @@
     }
 
     otherAvatar = await $circles.data.getAvatarInfo(address);
-    if (otherAvatar) {
-      profile = await getProfile(otherAvatar.avatar);
-    }
+
+    profile = await getProfile(address);
+
+    trustRow = $contacts?.data[address]?.row;
 
     if (otherAvatar?.type === 'CrcV2_RegisterGroup') {
       // load the members
@@ -67,119 +69,93 @@
       members = groupTrustRelations
         .filter((row) => row.relation === 'trusts')
         .map((o) => o.objectAvatar);
+
+      // TODO: Find mint handler
+      var findMintHandlerQuery = new CirclesQuery($circles.circlesRpc, {
+        namespace: 'CrcV2',
+        table: 'CMGroupCreated',
+        columns: ['mintHandler'],
+        filter: [
+          {
+            Type: 'FilterPredicate',
+            FilterType: 'Equals',
+            Column: 'proxy',
+            Value: address,
+          },
+        ],
+        sortOrder: 'DESC',
+        limit: 1,
+      });
+
+      await findMintHandlerQuery.queryNextPage();
+      mintHandler = findMintHandlerQuery.currentPage?.results[0]?.mintHandler;
+      console.log('mintHandler', mintHandler);
+
+      if (!$circles) return;
+
+      const vaultAddress = await getVaultAddress(
+        $circles.circlesRpc,
+        otherAvatar.avatar
+      );
+      if (!vaultAddress) {
+        collateralInTreasury = [];
+        return;
+      }
+
+      const balancesResult = await getVaultBalances(
+        $circles.circlesRpc,
+        vaultAddress
+      );
+      if (!balancesResult) {
+        collateralInTreasury = [];
+        return;
+      }
+
+      const { columns, rows } = balancesResult;
+      const colId = columns.indexOf('id');
+      const colBal = columns.indexOf('balance');
+
+      // Build up the table data
+      collateralInTreasury = rows.map((row) => ({
+        avatar: uint256ToAddress(BigInt(row[colId])),
+        amount: BigInt(row[colBal]),
+        amountToRedeem: 0, // default 0
+      }));
     } else {
       members = undefined;
     }
-
-    if (!profile) {
-      profile = {
-        name: otherAvatar?.name ?? address,
-      };
-    }
-
-    activeTab = 'common_connections';
   }
 
-  function getTypeString(type: string | undefined) {
-    if (!type) {
-      return '';
-    }
-    if (type === 'CrcV2_RegisterHuman') {
-      return 'Human';
-    } else if (type === 'CrcV2_RegisterGroup') {
-      return 'Group';
-    } else if (type === 'CrcV2_RegisterOrganization') {
-      return 'Organization';
-    } else if (type === 'CrcV1_Signup') {
-      return 'Human (v1)';
-    }
-    return '';
-  }
-
-  function getRelationText(row: ExtendedTrustRelationRow, profile?: Profile) {
-    if (!row) {
-      return `You don't trust each other`;
-    }
-    if (row.relation === 'mutuallyTrusts') {
-      return `You accept each others tokens`;
-    } else if (row.relation === 'trustedBy') {
-      return `${profile?.name} accepts your tokens`;
-    } else if (row.relation === 'trusts') {
-      return `You accept ${profile?.name}'s tokens`;
-    }
-
-    throw new Error(`Unknown relation: ${row.relation}`);
-  }
-
-  function getTrustRow(address: string | undefined) {
-    if (!address) {
-      return undefined;
-    }
-    if (!$contacts) {
-      return undefined;
-    }
-    return $contacts.data[address]?.row;
-  }
-
-  // function nextProfile(address: string) {
-  //   contentApi?.open?.({
-  //     title: shortenAddress(address),
-  //     component: ProfilePage,
-  //     props: {
-  //       address: address,
-  //       contentApi: contentApi,
-  //     },
-  //   });
-  // }
-
-  let commonConnectionsCount = 0;
-
-  let copyIcon = '/copy.svg';
-  
-  function handleCopy() {
-    navigator.clipboard.writeText(otherAvatar?.avatar ?? '');
-    copyIcon = '/check.svg';
-    
-    setTimeout(() => {
-      copyIcon = '/copy.svg';
-    }, 1000);
-  }
+  let commonConnectionsCount = $state(0);
 </script>
 
 <div class="flex flex-col items-center w-full sm:w-[90%] lg:w-3/5 mx-auto">
-  <Avatar
-    view="vertical"
-    clickable={false}
-    address={otherAvatar?.avatar}
-    {trustVersion}
-  >
-  </Avatar>
+  <Avatar view="vertical" clickable={false} {address} />
 
-  <span>
+  {#if trustRow}
     <span
       class="text-sm"
-      class:text-red-400={!(
-        getTrustRow(otherAvatar?.avatar)?.relation === 'trusts' ||
-        getTrustRow(otherAvatar?.avatar)?.relation === 'trustedBy' ||
-        getTrustRow(otherAvatar?.avatar)?.relation === 'mutuallyTrusts'
-      )}
-      class:text-green-600={getTrustRow(otherAvatar?.avatar)?.relation ===
-        'trusts' ||
-        getTrustRow(otherAvatar?.avatar)?.relation === 'trustedBy' ||
-        getTrustRow(otherAvatar?.avatar)?.relation === 'mutuallyTrusts'}
-      >{getRelationText(getTrustRow(otherAvatar?.avatar), profile)}</span
+      class:text-green-600={trustRow?.relation === 'trusts' ||
+        trustRow?.relation === 'trustedBy' ||
+        trustRow?.relation === 'mutuallyTrusts'}
     >
-  </span>
+      {formatTrustRelation(trustRow.relation, profile)}
+    </span>
+  {:else}
+    <span class="text-sm text-gray-500">No relation available</span>
+  {/if}
 
   <div class="my-6 flex flex-row gap-x-2">
-    <span class="bg-[#F3F4F6] border-none rounded-lg px-2 py-1 text-sm">{getTypeString(otherAvatar?.type)}</span>
-    <button
-      on:click={handleCopy}
-      class="bg-[#F3F4F6] border-none rounded-lg px-2 py-1 text-sm flex flex-row items-center gap-x-1 font-medium hover:text-black/70 hover:cursor-pointer"
+    <span class="bg-[#F3F4F6] border-none rounded-lg px-2 py-1 text-sm"
+      >{getTypeString(otherAvatar?.type || '')}</span
     >
-      {shortenAddress(otherAvatar?.avatar)}
-      <img src={copyIcon}  alt="Copy" class="w-4 h-4 inline" />
-    </button>
+    <AddressComponent address={address ?? '0x0'} />
+    <a
+      href={'https://gnosisscan.io/address/' + otherAvatar?.avatar}
+      target="_blank"
+      class="flex items-center justify-center bg-[#F3F4F6] border-none rounded-lg px-2 py-1 text-sm"
+      ><img src="/external.svg" alt="External Link" class="w-4" /></a
+    >
   </div>
 
   <div class="w-[80%] sm:w-[60%] border-b border-[#E5E7EB]"></div>
@@ -188,8 +164,8 @@
   <div class="w-full flex justify-center mt-6 space-x-6">
     <button
       class="btn btn-primary text-white"
-      on:click={() => {
-        contentApi?.open?.({
+      onclick={() => {
+        popupControls.open({
           title: 'Send Circles',
           component: SelectAsset,
           props: {
@@ -203,15 +179,25 @@
       <img src="/send-new.svg" alt="Send" class="w-5 h-5" />
       Send
     </button>
-    {#if getTrustRow(otherAvatar?.avatar)?.relation === 'trustedBy' && otherAvatar.type === 'CrcV2_RegisterGroup'}
+    {#if otherAvatar?.type === 'CrcV2_RegisterGroup' && !!mintHandler}
       <button
         class="btn bg-[#F3F4F6] border-none"
-        on:click={() => {
-          contentApi?.open?.({
-            title: 'Mint group tokens',
-            component: MintGroupTokens,
+        onclick={() => {
+          // TODO: Get the group mint handler
+          popupControls.open({
+            title: 'Enter Amount',
+            component: SelectAmount,
             props: {
-              address: address,
+              asset: transitiveTransfer(),
+              selectedAddress: mintHandler,
+              transitiveOnly: true,
+              amount: 0,
+              context: {
+                selectedAddress: mintHandler,
+                transitiveOnly: true,
+                selectedAsset: transitiveTransfer(),
+                amount: 0,
+              },
             },
           });
         }}
@@ -219,11 +205,11 @@
         Mint
       </button>
     {/if}
-    {#if getTrustRow(otherAvatar?.avatar)?.relation === 'trusts'}
+    {#if trustRow?.relation === 'trusts'}
       <button
         class="btn bg-[#F3F4F6] border-none"
-        on:click={() => {
-          contentApi?.open?.({
+        onclick={() => {
+          popupControls.open({
             title: 'Untrust',
             component: Untrust,
             props: {
@@ -235,11 +221,11 @@
       >
         Untrust
       </button>
-    {:else if getTrustRow(otherAvatar?.avatar)?.relation === 'mutuallyTrusts'}
+    {:else if trustRow?.relation === 'mutuallyTrusts'}
       <button
         class="btn bg-[#F3F4F6] border-none"
-        on:click={() => {
-          contentApi?.open?.({
+        onclick={() => {
+          popupControls.open({
             title: 'Untrust',
             component: Untrust,
             props: {
@@ -250,11 +236,11 @@
       >
         Untrust
       </button>
-    {:else if getTrustRow(otherAvatar?.avatar)?.relation === 'trustedBy'}
+    {:else if trustRow?.relation === 'trustedBy'}
       <button
         class="btn bg-[#F3F4F6] border-none"
-        on:click={() => {
-          contentApi?.open?.({
+        onclick={() => {
+          popupControls.open({
             title: 'Trust',
             component: Trust,
             props: {
@@ -268,8 +254,8 @@
     {:else}
       <button
         class="btn bg-[#F3F4F6] border-none"
-        on:click={() => {
-          contentApi?.open?.({
+        onclick={() => {
+          popupControls.open({
             title: 'Trust',
             component: Trust,
             props: {
@@ -291,23 +277,19 @@
     value="common_connections"
     role="tab"
     class="tab h-auto"
+    checked
     aria-label={`Common connections (${commonConnectionsCount})`}
-    bind:group={activeTab}
   />
-  <div
-    role="tabpanel"
-    class="tab-content mt-8 bg-base-100 border-none"
-  >
+  <div role="tabpanel" class="tab-content mt-8 bg-base-100 border-none">
     <div class="w-full border-base-300 rounded-box border">
       <CommonConnections
-        {contentApi}
-        otherAvatarAddress={otherAvatar?.avatar ?? ''}
+        otherAvatarAddress={otherAvatar?.avatar}
         bind:commonConnectionsCount
       />
     </div>
   </div>
 
-  {#if members} 
+  {#if members}
     <input
       type="radio"
       name="tabs"
@@ -315,7 +297,6 @@
       role="tab"
       class="tab h-auto"
       aria-label={`Members (${members.length})`}
-      bind:group={activeTab}
     />
     <div
       role="tabpanel"
@@ -325,22 +306,11 @@
         <!-- TODO: use the generic list component -->
         <div class="-mx-4">
           <button
-            class="flex w-full items-center justify-between p-4 bg-base-100 hover:bg-base-200"        
+            class="flex w-full items-center justify-between p-4 bg-base-100 hover:bg-base-200"
           >
-            <Avatar address={member} {contentApi} >
-                <!-- <div>
-                    {#if $contacts?.data[address]}
-                        <span class="text-[#6B7280]">{formatTrustRelation($contacts.data[address].row)}</span>
-                    {/if}
-                </div> -->
-                
-            </Avatar>
+            <Avatar address={member} view="horizontal" />
             <div class="font-medium underline flex gap-x-2">
-              <img
-                src="/chevron-right.svg"
-                alt="Chevron Right"
-                class="w-4"
-              />
+              <img src="/chevron-right.svg" alt="Chevron Right" class="w-4" />
             </div>
           </button>
         </div>
@@ -348,6 +318,22 @@
       {#if members.length === 0}
         <div>No members</div>
       {/if}
+    </div>
+  {/if}
+  {#if otherAvatar?.type === 'CrcV2_RegisterGroup'}
+    <input
+      type="radio"
+      name="tabs"
+      value="collateral"
+      role="tab"
+      class="tab h-auto"
+      checked
+      aria-label={`Collateral (${collateralInTreasury.length})`}
+    />
+    <div role="tabpanel" class="tab-content mt-8 bg-base-100 border-none">
+      <div class="w-full border-base-300 rounded-box border">
+        <CollateralTable {collateralInTreasury} />
+      </div>
     </div>
   {/if}
 </div>
