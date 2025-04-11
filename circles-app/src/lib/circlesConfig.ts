@@ -12,9 +12,9 @@ export const chiadoConfig: CirclesConfig = {
 };
 
 export const gnosisConfig: CirclesConfig = {
-  circlesRpcUrl: 'https://rpc.aboutcircles.com/',
+  circlesRpcUrl: 'https://static.94.138.251.148.clients.your-server.de/',
   pathfinderUrl: 'https://pathfinder.aboutcircles.com',
-  profileServiceUrl: 'https://rpc.aboutcircles.com/profiles/',
+  profileServiceUrl: 'https://static.94.138.251.148.clients.your-server.de/profiles/',
   v1HubAddress: '0x29b9a7fbb8995b2423a71cc17cf9810798f6c543',
   v2HubAddress: '0x3D61f0A272eC69d65F5CFF097212079aaFDe8267',
   nameRegistryAddress: '0x8D1BEBbf5b8DFCef0F7E2039e4106A76Cb66f968',
